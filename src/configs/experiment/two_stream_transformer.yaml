@@ -1,0 +1,63 @@
+# @package _global_
+# Two-Stream Spatio-Temporal Transformer — Track A (from scratch).
+# Heavier than cnn_lstm (two CNN backbones + temporal transformer), so we lean
+# on the same regularization stack: AdamW + weight decay, strong augmentation,
+# class-balanced sampling, mixup + cutmix, AMP for speed.
+defaults:
+  - override /model: two_stream_transformer
+
+dataset:
+  num_frames: 4
+
+training:
+  epochs: 60
+  batch_size: 32           # smaller than cnn_lstm (two backbones eat more VRAM)
+  lr: 3.0e-4
+  optimizer: adamw
+  weight_decay: 0.05
+  use_amp: true
+
+  # No pretrained transformer blocks → layer-wise LR decay irrelevant.
+  lwlrdecay: false
+
+  # --- Augmentation: aggressive (closed world, from scratch) ---------------
+  # Horizontal flip is OFF — SSv2 contains directional classes
+  # ("Pulling left to right" vs "...right to left"). Flipping would mislabel.
+  # Mirroring also corrupts the motion stream (sign of horizontal motion flips).
+  use_horizontal_flip: false
+
+  use_random_crop: true
+  random_crop_scale: [0.7, 1.0]
+  random_crop_ratio: [0.85, 1.15]
+
+  use_color_jitter: true
+  color_jitter_strength: 0.2
+
+  use_random_erasing: true
+  random_erasing_p: 0.25
+  random_erasing_scale: [0.02, 0.2]
+  random_erasing_ratio: [0.3, 3.3]
+
+  use_rotation: true
+  rotation_degrees: 8.0
+
+  use_sharpness: true
+  sharpness_strength: 0.4
+
+  # ---- Class balancing: oversample under-represented classes --------------
+  use_class_balanced_sampler: true
+  class_balance_method: sqrt
+
+  # ---- Mixup + CutMix -----------------------------------------------------
+  # Motion differencing is linear, so mixup commutes with it: mixing two clips
+  # at the input level produces a clean linear combination of their motion
+  # streams — no special handling needed.
+  use_mixup: true
+  mixup_alpha: 0.2
+  use_cutmix: true
+  cutmix_alpha: 1.0
+  mix_prob: 0.5
+
+  num_workers: 4
+  persistent_workers: true
+  prefetch_factor: 4

@@ -1,0 +1,21 @@
+# @package _global_
+# MaxViT-Tiny (Tu et al., ECCV 2022) used as a frame encoder, with temporal
+# mean pooling and a linear head. Track A by default (pretrained=false).
+#
+# Architectural recap inside every MaxViT block:
+#   * MBConv (depthwise + squeeze-excitation)  — CNN locality.
+#   * Block attention over 7x7 windows         — LOCAL attention.
+#   * Grid attention over a dilated grid       — sparse-global mixer.
+#
+# The wrapper is shape-fixed to a 224x224 spatial input because torchvision's
+# maxvit_t hard-codes the 7x7 partition window. Keep
+# `dataset.image_size: 224` (project default) and you're fine.
+model:
+  name: maxvit_temporal
+  pretrained: false
+  num_classes: ${num_classes}
+  # Dropout applied between the pooled per-frame features and the linear
+  # head. The MaxViT block itself already carries stochastic depth, so
+  # 0.3 here is a moderate extra regularizer for from-scratch training.
+  # Set to 0.0 to disable.
+  dropout: 0.3

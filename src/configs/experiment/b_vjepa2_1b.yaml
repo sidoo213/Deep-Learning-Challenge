@@ -1,0 +1,53 @@
+# @package _global_
+# Track B (open world): V-JEPA 2 ViT-g (1B) finetune.
+#
+# This is the heaviest config in the repo. The model is already
+# SOTA on SSv2 out-of-the-box, so the recipe is "kiss it, don't punch it":
+# very few epochs, very low LR, mild augmentation, layer-wise LR decay so
+# early blocks barely move.
+#
+# VRAM (24 GB target, AMP + gradient checkpointing ON):
+#   batch_size=1: ~14-18 GB  (safe)
+#   batch_size=2: ~20-23 GB  (tight — try if you have headroom)
+# If you OOM: drop batch_size to 1 and/or lower image_size to 256 in the
+# model config (small accuracy hit but much cheaper).
+defaults:
+  - override /model: b_vjepa2_1b
+
+dataset:
+  # Project-pinned: 4 frames per clip. The wrapper replicates each to fit
+  # V-JEPA 2 ViT-g's native 64-frame input.
+  num_frames: 4
+
+training:
+  # 3 epochs is usually enough — the model arrives near its ceiling and
+  # extra epochs mostly overfit the 33-class subset.
+  epochs: 3
+  # ViT-g + 64 internal frames @ 384 is enormous. Start at 1; raise only
+  # after the first epoch confirms VRAM headroom.
+  batch_size: 1
+  # 1e-5 is conservative. Bigger backbones tolerate smaller LRs better than
+  # bigger LRs — when in doubt, halve rather than double.
+  lr: 1.0e-5
+  optimizer: adamw
+  weight_decay: 0.05
+  use_amp: true
+
+  # Layer-wise LR decay: head gets `lr`, each transformer block earlier gets
+  # `lr × llrd_rate^(depth_to_head)`. ViT-g has ~40 blocks; a higher rate
+  # (closer to 1) keeps early layers learning slowly without freezing them.
+  lwlrdecay: true
+  llrd_rate: 0.85
+
+  # Augmentation: mild. The pretrained prior is strong enough that heavy
+  # aug just becomes noise.
+  use_horizontal_flip: false   # SSv2 has directional classes — flip is label noise.
+  use_random_crop: true
+  random_crop_scale: [0.85, 1.0]
+  use_color_jitter: false
+  use_random_erasing: false
+
+  # 1B-param forwards are slow; aggressive prefetching helps keep the GPU fed.
+  num_workers: 8
+  persistent_workers: true
+  prefetch_factor: 4

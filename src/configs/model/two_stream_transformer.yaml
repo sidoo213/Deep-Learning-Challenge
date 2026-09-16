@@ -1,0 +1,15 @@
+# @package _global_
+# Two-Stream (RGB + motion difference) + Spatial Self-Attention + Temporal Transformer
+# Track A: trained entirely from scratch.
+model:
+  name: two_stream_transformer
+  pretrained: false
+  num_classes: ${num_classes}
+  base_channels: 32
+  spatial_attn_heads: 4
+  d_model: 256
+  num_heads: 8
+  num_layers: 4
+  dim_feedforward: 1024
+  dropout: 0.2          # shared internal dropout (frame proj, transformer attn + FFN)
+  head_dropout: 0.5     # strong dropout on the pooled [CLS] before the classifier

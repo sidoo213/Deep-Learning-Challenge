@@ -1,0 +1,20 @@
+# @package _global_
+# Track B (open world): VideoMAE base, fine-tuned on Something-Something V2.
+# Source: https://huggingface.co/MCG-NJU/videomae-base-finetuned-ssv2
+# Pretrained top-1 on full SSv2 (174 classes): 70.6%
+model:
+  name: b_videomae
+  pretrained: true
+  num_classes: ${num_classes}
+  # HuggingFace checkpoint to load. Other reasonable choices:
+  #   MCG-NJU/videomae-small-finetuned-ssv2          (smaller / faster, top-1 66.8)
+  #   MCG-NJU/videomae-base-short-finetuned-ssv2     (less pretraining)
+  model_id: MCG-NJU/videomae-base-finetuned-ssv2
+  # The challenge's processed_data only provides 4 frames per video. Loading
+  # VideoMAE with num_frames=4 reinitializes the temporal positional embeddings
+  # (the pretrained ones were sized for 16 frames). The patch embedding conv
+  # (tubelet 2 along time) is unaffected and keeps its pretrained weights.
+  # Setting num_frames > 4 would just trigger frame duplication in the dataset.
+  num_frames: 4
+  # If true, only the classifier head is trained (linear probe). Faster but lower ceiling.
+  freeze_backbone: false

@@ -1,0 +1,39 @@
+# @package _global_
+# MViT/MViTv2 fine-tuning on the challenge's 33 classes (Track B).
+# Conservative settings — MViT is sensitive to large LRs because of the
+# stage-wise downsampling (gradients are imbalanced across scales).
+defaults:
+  - override /model: b_mvitv2
+
+dataset:
+  num_frames: 4
+
+training:
+  epochs: 4
+  batch_size: 8                    # Base @ 16 frames / 224² fits comfortably on 20GB
+  lr: 1.0e-4
+  optimizer: adamw
+  weight_decay: 0.05
+  use_amp: true
+
+  # Stage-wise LR decay (smaller LR on early stages). Standard 0.75 for MViT.
+  lwlrdecay: true
+  llrd_rate: 0.75
+
+  # Mild augmentation — the SSv2-finetuned checkpoint is already well-regularized.
+  use_horizontal_flip: false       # directional classes in SSv2
+  use_random_crop: true
+  random_crop_scale: [0.85, 1.0]
+  use_color_jitter: true
+  color_jitter_strength: 0.1
+
+  use_random_erasing: false
+  use_rotation: false
+  use_sharpness: false
+
+  use_class_balanced_sampler: false  # full FT — keep natural distribution
+  use_mixup: false
+  use_cutmix: false
+
+  num_workers: 4
+  persistent_workers: true

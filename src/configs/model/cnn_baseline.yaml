@@ -1,0 +1,24 @@
+# @package _global_
+# Frame CNN + temporal average pooling.
+# Track A: pretrained=false (closed world, no ImageNet weights).
+# Track B: pretrained=true  (open world, uses the best torchvision weights).
+model:
+  name: cnn_baseline
+  pretrained: true
+  num_classes: ${num_classes}
+  # Backbone choice. Options (all share the .fc head, same forward path):
+  #   resnet18           — original baseline, 11M params, F=512.
+  #                        Keep this if you need fast iteration or have a
+  #                        small dataset where 25M params would overfit.
+  #   resnet34           — 21M params, F=512. Incremental upgrade.
+  #   resnet50           — 25M params, F=2048. New default — sweet spot of
+  #                        capacity vs trainability for 33-class video.
+  #                        Track B uses IMAGENET1K_V2 weights (80.9% top-1).
+  #   resnext50_32x4d    — 25M params, F=2048. Marginally stronger than
+  #                        resnet50 in practice; same VRAM.
+  #   wide_resnet50_2    — 69M params, F=2048. Only if you have spare VRAM
+  #                        and a strong augmentation pipeline.
+  backbone: resnet50
+  # Dropout on the pooled features before the classifier. Helps regularize
+  # the larger backbones; set to 0.0 to disable (the legacy behavior).
+  dropout: 0.3

@@ -1,0 +1,34 @@
+# @package _global_
+# Track B (open world): V-JEPA 2 (Meta, 2025) finetuned on Something-Something V2.
+# Source: https://huggingface.co/facebook/vjepa2-vitl-fpc16-256-ssv2
+# Self-supervised pretraining on a very large video corpus + SSv2 finetune
+# (174 classes, top-1 ~77% on the full set). Strongest publicly available
+# checkpoint for our task domain.
+model:
+  name: b_vjepa2
+  pretrained: true
+  num_classes: ${num_classes}
+  # Default checkpoint. Alternatives:
+  #   facebook/vjepa2-vitg-fpc64-384-ssv2   (ViT-G, 64 frames, 384px — much heavier)
+  #   qubvel-hf/vjepa2-vitl-fpc16-256-ssv2  (community mirror of the ViT-L)
+  model_id: facebook/vjepa2-vitl-fpc16-256-ssv2
+  # processed_data ships 4 frames per clip; V-JEPA 2 fpc16 native = 16. The
+  # wrapper replicates each input frame native/target times to fit the model.
+  # Must divide the model's native frame count (16 -> use 4 or 8).
+  num_frames: 4
+  # The fpc16 checkpoint was trained at 256x256. The wrapper bilinearly upsamples
+  # 224x224 inputs to 256 internally — set this to match the checkpoint family.
+  image_size: 256
+  # Linear probe: freeze backbone, only train the new classifier head. Faster
+  # but caps quality. Full finetune (false) is what unlocks the model's ceiling.
+  freeze_backbone: false
+
+  # ----- LoRA (parameter-efficient fine-tuning) ----------------------------- #
+  # See b_vjepa2_1b.yaml for the full description. Defaults are off, so this
+  # config keeps the original full-finetune behaviour.
+  use_lora: false
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  lora_target_modules: null
+  lora_bias: none

@@ -1,0 +1,13 @@
+# @package _global_
+# CNN + Temporal Transformer — Track A (from scratch, no pretrained weights)
+defaults:
+  - override /model: cnn_transformer
+
+dataset:
+  # The dataset has exactly 4 frames per video — keep this in sync everywhere.
+  num_frames: 4
+
+training:
+  epochs: 10
+  batch_size: 64
+  lr: 0.0001

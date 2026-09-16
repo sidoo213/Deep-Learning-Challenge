@@ -1,0 +1,20 @@
+# @package _global_
+# ViViT Factorized Encoder — pure transformer, Track A (from scratch).
+# ~8M params at default size. Scale up via embed_dim / depths if VRAM allows.
+model:
+  name: vivit
+  pretrained: false
+  num_classes: ${num_classes}
+  num_frames: 4
+  image_size: 224
+  patch_size: 16
+  tubelet_size: 2           # 4 frames / 2 = T'=2 temporal positions
+  embed_dim: 256            # 192 (tiny) / 256 (default) / 384 (small) / 512 (base)
+  spatial_depth: 6          # spatial transformer layers
+  temporal_depth: 4         # temporal transformer layers
+  num_heads: 8              # embed_dim must be divisible by num_heads
+  mlp_ratio: 4.0
+  dropout: 0.0
+  attn_dropout: 0.0
+  drop_path_rate: 0.1       # stochastic depth, linearly scaled through depth
+  layer_scale_init: 1.0     # 1.0 for ~10-layer stacks; drop to 0.1 if you go to 24+

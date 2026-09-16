@@ -1,0 +1,69 @@
+# @package _global_
+# Track A (closed world): ResNet18 (from scratch) + bidirectional LSTM with
+# attention pooling. The model is small but the dataset is small too — the
+# main risk is overfitting, so this experiment leans hard on:
+#   - strong data augmentation (random crop, color jitter, erasing, rotation)
+#   - class-balanced sampling (some action classes are sparse)
+#   - mixup + cutmix (label smoothing via interpolation)
+#   - AdamW with non-trivial weight decay
+#   - enough epochs for the from-scratch CNN to actually learn features
+defaults:
+  - override /model: cnn_lstm
+
+dataset:
+  num_frames: 4
+
+training:
+  epochs: 60
+  batch_size: 32
+  lr: 3.0e-4
+  optimizer: adamw
+  weight_decay: 0.05
+  use_amp: true
+
+  # Cosine LR decay with warmup (replaces the previous flat LR for all 60 epochs).
+  scheduler: cosine
+  warmup_epochs: 3
+  min_lr_ratio: 0.0
+
+  # Layer-wise LR decay is irrelevant here (no pretrained transformer blocks).
+  lwlrdecay: false
+
+  # --- Augmentation: aggressive on purpose (closed world, no prior to protect) -
+  # Horizontal flip is OFF — Something-Something V2 contains directional classes
+  # ("Pulling something from left to right" vs "...right to left"). Flipping
+  # would silently mislabel them.
+  use_horizontal_flip: false
+
+  use_random_crop: true
+  random_crop_scale: [0.7, 1.0]
+  random_crop_ratio: [0.85, 1.15]
+
+  use_color_jitter: true
+  color_jitter_strength: 0.2
+
+  use_random_erasing: true
+  random_erasing_p: 0.25
+  random_erasing_scale: [0.02, 0.2]
+  random_erasing_ratio: [0.3, 3.3]
+
+  use_rotation: true
+  rotation_degrees: 8.0
+
+  use_sharpness: true
+  sharpness_strength: 0.4
+
+  # ---- Class balancing: oversample under-represented classes ---------------
+  use_class_balanced_sampler: true
+  class_balance_method: sqrt
+
+  # ---- Mixup + CutMix: random batch-pair mixing for label smoothing --------
+  use_mixup: true
+  mixup_alpha: 0.2
+  use_cutmix: true
+  cutmix_alpha: 1.0
+  mix_prob: 0.5      # 50% of batches get mixed, 50% stay clean
+
+  num_workers: 4
+  persistent_workers: true
+  prefetch_factor: 4

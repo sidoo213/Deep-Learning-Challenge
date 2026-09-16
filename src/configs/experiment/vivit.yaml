@@ -1,0 +1,40 @@
+# @package _global_
+# ViViT Factorized Encoder — Track A from scratch. Transformers from scratch
+# need aggressive regularization; defaults below are tuned for that.
+defaults:
+  - override /model: vivit
+
+dataset:
+  num_frames: 4
+
+training:
+  epochs: 60                # transformers from scratch need more epochs than CNNs
+  batch_size: 16            # 8M params at 224×224 → fits comfortably; bump up if VRAM ok
+  lr: 5.0e-4                # standard AdamW LR for ViT from scratch
+  optimizer: adamw
+  weight_decay: 0.05        # standard ViT weight decay
+  use_amp: true
+
+  # SSv2 has directional classes — keep flip off.
+  use_horizontal_flip: false
+  use_random_crop: true
+  random_crop_scale: [0.7, 1.0]
+  use_color_jitter: true
+  color_jitter_strength: 0.2
+  use_random_erasing: true
+  random_erasing_p: 0.25
+
+  # Mixup + CutMix: critical for transformers from scratch — without them
+  # ViT-style models overfit hard on small datasets.
+  use_mixup: true
+  mixup_alpha: 0.2
+  use_cutmix: true
+  cutmix_alpha: 1.0
+  mix_prob: 0.5
+
+  use_class_balanced_sampler: true
+  class_balance_method: sqrt
+
+  num_workers: 8
+  persistent_workers: true
+  prefetch_factor: 4

@@ -1,0 +1,15 @@
+# @package _global_
+# Track B (open world): TimeSformer base, fine-tuned on Something-Something V2.
+# Source: https://huggingface.co/facebook/timesformer-base-finetuned-ssv2
+# Uses divided space-time attention.
+model:
+  name: b_timesformer
+  pretrained: true
+  num_classes: ${num_classes}
+  # HuggingFace checkpoint. Alternative: facebook/timesformer-hr-finetuned-ssv2 (higher resolution).
+  model_id: facebook/timesformer-base-finetuned-ssv2
+  # The challenge's processed_data only provides 4 frames per video. Loading
+  # TimeSformer with num_frames=4 truncates the temporal positional embeddings
+  # (native was 8). Loss is minor — only the temporal pos table is affected.
+  num_frames: 4
+  freeze_backbone: false

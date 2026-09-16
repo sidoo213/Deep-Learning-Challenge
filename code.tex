@@ -1,0 +1,549 @@
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+\usepackage{cvpr}
+\usepackage{times}
+\usepackage{epsfig}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+
+\usepackage[pagebackref=true,breaklinks=true,letterpaper=true,colorlinks,bookmarks=false]{hyperref}
+
+\def\cvprPaperID{****}
+\def\httilde{\mbox{\tt\raisebox{-.5ex}{\symbol{126}}}}
+
+\ifcvprfinal\pagestyle{empty}\fi
+\begin{document}
+
+%%%%%%%%% TITLE
+\title{What Happens Next? Action Anticipation on a 33-class subset of Something-Something V2}
+
+\author{Khalil Ayadi\\
+\'Ecole Polytechnique --- CSC\_43M04\_EP\\
+{\tt\small khalil.ayadi@polytechnique.edu}
+}
+
+\maketitle
+
+%%%%%%%%% ABSTRACT
+\begin{abstract}
+We address the \emph{What Happens Next?} challenge, a 33-class action
+anticipation task built from the early frames of Something-Something V2
+(SSv2) clips. Two tracks are considered: a closed-world track (training
+from scratch, no external data or weights) and an open-world track
+(pretrained models allowed). For the closed track, we benchmark a
+CNN--LSTM with attention pooling, a two-stream spatio-temporal
+transformer, and the Temporal Shift Module (TSM). We observe that
+\emph{architectures that encode temporal reasoning through cheap,
+structural priors} (TSM channel shift, two-stream motion differencing)
+clearly outperform pure-attention models trained from scratch on this
+small dataset. For the open track, we adapt VideoMAE, TimeSformer,
+MViTv2 and V-JEPA~2 (ViT-L 0.4B and ViT-g 1B) through HuggingFace
+wrappers, and add a LoRA fine-tuning path to keep the 1B variant
+tractable. Our strongest submission is a late ensemble of heterogeneous
+checkpoints whose weights and per-model temperatures are learned by
+\emph{simplex projected SGD}, calibrated on leakage-free K-fold
+out-of-fold predictions, and refined at inference with 5-crop
+test-time augmentation. We also document two inference-time corrections
+(Bayesian log-prior subtraction, temperature calibration). Source code
+and detailed experimental logs are provided alongside this report.
+\end{abstract}
+
+%-------------------------------------------------------------------------
+\section{Problem description}
+
+The challenge is a 33-class subset of Something-Something V2~\cite{Goyal17}.
+Each clip is represented as four extracted frames covering the
+\emph{beginning} of an action; the system must predict the full action
+class (e.g.~\textit{Pretending to throw something}, \textit{Pouring
+something into something}). The metric is top-1 accuracy on a held-out
+test set, with top-5 reported as a secondary metric.
+
+Two factors make this dataset specifically hard:
+\begin{itemize}
+    \item \textbf{Partial observation.} Only 4 frames are available, and
+    several classes are temporal twins of more common classes
+    (e.g.~\textit{Picking up} vs. \textit{Pretending to pick up}) that
+    become visually identical in the first few frames.
+    \item \textbf{Class imbalance.} Train counts range from
+    $\sim$$160$ for \textit{Spilling} to $\sim$$2{,}250$ for
+    \textit{Throwing}, and class index $27$ is entirely missing from the
+    training split.
+\end{itemize}
+
+The challenge defines two tracks: closed world (Track A) forbids any
+pretrained weights or external data, and open world (Track B) allows
+them. We participated in both. Our code is built on top of the
+instructor-provided Hydra+PyTorch skeleton; we only added new model
+files, new YAML configs, and \texttt{build\_model} branches, plus
+opt-in flags in the training loop. Inference scripts
+(\texttt{evaluate.py}, \texttt{create\_submission.py}) were never
+modified.
+
+%-------------------------------------------------------------------------
+\section{Method}
+
+\subsection{Pipeline and shared training recipe}
+
+Every model accepts a $(B, T, C, H, W)$ tensor of frames and outputs
+$(B, K)$ logits with $K=33$. With $T=4$ pinned by the dataset, the
+design problem reduces to: \emph{how do we extract spatial features per
+frame, and how do we mix them across the 4 time steps?} The dataset
+loader, optimizer (AdamW, which beats the canonical SGD recipe on this
+task, Table~\ref{tab:opt}), AMP, augmentation knobs, label smoothing,
+and class-balanced sampling are shared by all closed-track models.
+Each architecture only chooses the spatial encoder and the temporal
+aggregation.
+
+\subsection{Data augmentation}
+\label{sec:aug}
+
+All augmentation knobs are exposed through Hydra so individual
+ablations are one-line CLI overrides. For from-scratch training
+(Track~A) we ablated each transform on the validation set; the outcome
+guided a deliberately \emph{minimal} final recipe, contrary to our
+initial intuition that more augmentation would help on a small dataset.
+
+\begin{itemize}
+    \item \textbf{Kept.} Random resized crop (scale $[0.6, 1.0]$) and
+    ColorJitter (strength $0.2$): both consistently improved or left
+    top-1 unchanged, and add no label noise.
+    \item \textbf{Removed after ablation.} Horizontal flip, small
+    rotation, sharpness and Gaussian blur each \emph{degraded} top-1.
+    Our best from-scratch checkpoints are exactly those with all four
+    disabled (Appendix~A).
+    \item \textbf{Mixing.} Mixup~\cite{Zhang18mixup} ($\alpha=0.2$) and
+    CutMix~\cite{Yun19cutmix} ($\alpha=1.0$), evaluated both on and off
+    as a regularizer; kept as a diversity lever across ensemble members.
+\end{itemize}
+
+A subtle but important point explains the flip result:
+\emph{horizontal flip is label-breaking} on SSv2, which contains
+direction-sensitive classes (\textit{Pushing something from left to
+right} vs.~\textit{\dots from right to left}). For the two-stream
+model, flipping additionally corrupts the motion stream, which encodes
+the \emph{sign} of horizontal motion. This is also why the test-time
+augmentation of Sec.~\ref{sec:tta} excludes the flip.
+
+\subsection{Closed-track models (Track~A)}
+\label{sec:closed}
+
+We benchmarked three architectures.
+
+\paragraph{CNN--LSTM.} ResNet-18 features per frame, LayerNorm and
+feature dropout, a bidirectional 2-layer LSTM with hidden $256$,
+attention pooling over the $T=4$ outputs, and a dropout-$0.5$ head.
+Orthogonal init on $W_{hh}$, Xavier on $W_{ih}$, forget-gate bias
+initialised to $1.0$~\cite{Jozefowicz15}. We deliberately replaced
+``take the last LSTM hidden'' with additive attention, since on $T=4$
+the last hidden state discards $75\%$ of the temporal information.
+
+\paragraph{Two-stream spatio-temporal transformer.} Two parallel
+shallow ResNet backbones (RGB and frame-difference), each topped by a
+single spatial self-attention layer over $H\times W$ positions. A small
+temporal transformer aggregates the per-stream, per-frame tokens through
+a learnable \texttt{[CLS]} token. We empirically reverted from
+mean-pooling back to \texttt{[CLS]} aggregation after observing val
+accuracy collapse with mean pooling (see Sec.~\ref{sec:failures}).
+
+\paragraph{Temporal Shift Module (TSM).} A 2D ResNet variant where, at
+every residual block, $1/8$ of channels are shifted forward and $1/8$
+backward along the temporal axis~\cite{Lin19tsm}. The shift carries
+zero parameters and negligible FLOPs but gives the 2D CNN access to
+neighbouring frames inside every block. We expose the backbone depth as
+a flag (ResNet-18 by default, ResNet-34 layout $(3,4,6,3)$ optional),
+and the temporal aggregation as \texttt{mean}, attention or a depthwise
+1-D \texttt{tconv}.
+
+\subsection{Open-track models (Track~B)}
+
+For Track~B, we added HuggingFace wrappers (under the \texttt{b\_}
+prefix) for four SSv2-pretrained backbones:
+
+\begin{itemize}
+    \item \textbf{VideoMAE base} ($\sim$$85$M params,
+    \cite{Tong22videomae}): masked-autoencoding pre-training on SSv2,
+    then supervised fine-tuning.
+    \item \textbf{TimeSformer base}~\cite{Bertasius21timesformer}:
+    \emph{divided space-time attention} ViT, fine-tuned on SSv2.
+    \item \textbf{MViTv2}~\cite{Li22mvitv2}: multiscale ViT with
+    stage-wise spatial pooling, an architecturally diverse complement
+    to the plain ViT family above.
+    \item \textbf{V-JEPA~2} (Meta, 2025): self-supervised video
+    representation learning. We integrated both the ViT-L
+    ($\sim$$400$M) and ViT-g ($\sim$$1.1$B) variants.
+\end{itemize}
+
+For the V-JEPA~2 1B model, full fine-tuning is fragile and expensive,
+so we added a \textbf{LoRA path} using HuggingFace
+\texttt{peft}~\cite{Hu22lora}. Rank-$16$ LoRA adapters are inserted into
+the attention projections (\texttt{q/k/v/o\_proj}), and only the new
+classifier head is kept fully trainable. This freezes
+$\sim$$99.5\%$ of the parameters, makes training 2--3$\times$ faster,
+and--crucially--makes catastrophic forgetting of the SSv2 prior
+impossible.
+
+\subsection{Inference-time corrections}
+
+Three corrections are applied at inference, model-agnostically.
+
+\paragraph{Log-prior subtraction.} The training set imposes an implicit
+prior $\log P(y_{\text{train}})$ on the network output. For pairs of
+visually-similar classes, the model defaults to whichever class has more
+training samples. We subtract $\alpha \cdot \log P(y_{\text{train}})$
+from each logit at inference~\cite{Menon20logitadj}, with the missing
+class~$27$ crushed to $-\infty$. We found $\alpha=0.5$ a safe sweet spot;
+on a test set that matches the train distribution, full subtraction
+($\alpha=1$) over-corrects and lowers top-1, so we keep it optional.
+
+\paragraph{Per-model temperature scaling.} Before averaging softmaxes
+in the ensemble, we fit a per-model temperature $T_i$ on the NLL of the
+calibration set~\cite{Guo17calibration}. This does not change a model's
+top-1 but rescales over-confident models so that they do not dominate
+the average.
+
+\paragraph{Test-time augmentation (TTA).}
+\label{sec:tta}
+At inference we average the softmax over five spatial crops per clip
+(center $+$ four corners, after resizing the short side at the classic
+$256/224$ ratio). Every frame of a clip receives the \emph{same} crop so
+temporal motion is preserved, and we deliberately exclude the
+horizontal flip of standard 10-crop TTA (Sec.~\ref{sec:aug}). TTA is
+applied identically to the calibration and the test set, and yields a
+consistent $+0.5$--$1.5$ top-1 points for no retraining.
+
+\subsection{Ensemble: simplex-SGD weights with leakage-free calibration}
+\label{sec:ensemble}
+
+Our final submission is a weighted average of per-model
+temperature-scaled softmaxes,
+\[
+P_{\text{ens}}(y\mid x) = \sum_i w_i\,
+\text{softmax}\!\left(\frac{\ell_i(x)}{T_i}\right),
+\]
+where $\ell_i$ are the raw logits of model $i$. Rather than a heuristic
+accuracy-power weighting, we \emph{learn} the weights and temperatures
+directly. We parameterize $w = \text{softmax}(\theta)$, which keeps the
+weights on the probability simplex by construction ($w_i\!\ge\!0$,
+$\sum_i w_i\!=\!1$), and optionally a per-model log-temperature, then
+minimize the ensemble NLL on a calibration set by Adam (we call this
+\emph{simplex-SGD}). A small $\ell_2$ penalty on $\theta$ keeps the
+solution close to uniform on noisy calibration data. Because the weights
+cannot go negative, adding a weak-but-diverse model is low-risk: the
+optimizer simply drives its weight toward zero rather than letting it
+harm the average.
+
+\paragraph{Leakage-free calibration (K-fold OOF).} Fitting the weights
+on data a model was trained on would reward over-confident memorization.
+We therefore calibrate either on the held-out \texttt{val/} directory
+(never seen at training), or on \emph{K-fold out-of-fold} (OOF)
+predictions: each family is trained $K=5$ times, each fold holding out a
+disjoint $20\%$ of the train set, so that stitching the five held-out
+predictions yields one honest softmax per training clip. The simplex
+weights fit on these OOF predictions transfer to the test set without
+leakage. The script verifies that the union of the five held-out folds
+covers the train set exactly (no gap, no duplicate) before stacking.
+
+%-------------------------------------------------------------------------
+\section{Implementation}
+
+Every model lives in \texttt{src/models/*.py}, with one YAML in
+\texttt{configs/model/} and one ``experiment'' YAML in
+\texttt{configs/experiment/} overriding the training defaults. A K-fold
+TSM family is launched with one CLI per fold:
+
+\begin{verbatim}
+python src/train.py experiment=tsm \
+  +dataset.kfold_num=5 +dataset.kfold_index=0 \
+  training.epochs=30 model.temporal_pool=mean \
+  training.use_class_balanced_sampler=false \
+  training.use_color_jitter=true \
+  training.use_horizontal_flip=false \
+  training.checkpoint_path=tsm_fold0.pt
+\end{verbatim}
+
+\texttt{oof\_predict.py} then stitches the five fold checkpoints into one
+leakage-free softmax tensor, and \texttt{ensemble\_predict.py} takes an
+arbitrary list of checkpoints plus a calibration source (OOF files or a
+labelled directory), fits the simplex-SGD weights, optionally applies
+TTA, and writes the submission CSV. Inference scripts reload each
+architecture from the \emph{config merged into the checkpoint}, so a
+checkpoint produced by any branch reloads through a single
+\texttt{build\_model} call.
+
+\paragraph{What is ours vs.~provided.} The instructor-provided skeleton
+consists of the dataset loader, the training loop scaffold, the
+inference scripts, and an initial \texttt{cnn\_lstm} baseline.
+\emph{Our additions} are: the two-stream transformer and TSM models
+(with the ResNet-34 depth flag); the augmentation toggles in
+\texttt{utils.build\_transforms}; mixup/cutmix/class-balanced sampling;
+the focal loss and logit-adjustment training paths; the log-prior
+calibration; the K-fold split and \texttt{oof\_predict.py}; the
+simplex-SGD$+$TTA ensemble in \texttt{ensemble\_predict.py}; and the
+LoRA-aware V-JEPA~2 wrapper. The HuggingFace pretrained checkpoints used
+for Track~B are external (cited above); we re-use the standard
+\texttt{peft} library for LoRA.
+
+\paragraph{Engineering encountered.} Three issues consumed significant
+time and are documented in \texttt{problems.md}: (1) a DataLoader
+bottleneck (GPU oscillating $0\%\!\rightarrow\!100\%$) fixed with AMP,
+TF32, \texttt{cudnn.benchmark}, non-blocking transfers and a higher
+\texttt{prefetch\_factor}; (2) an OOM-kill of the workers fixed by
+lowering \texttt{prefetch\_factor} and defaulting
+\texttt{persistent\_workers} to false; (3) a prior-calibration bug where
+the missing class $27$ received a $+20.7$~nat boost and collapsed top-1
+to zero, fixed by assigning $-\infty$ to absent classes.
+
+%-------------------------------------------------------------------------
+\section{Results}
+
+\subsection{Closed track (Track~A)}
+
+Table~\ref{tab:closed} reports validation top-1 / top-5 of the main
+closed-track runs (held-out \texttt{val/} directory, raw logits, best
+checkpoint per run). The full recipe ablation is in Appendix~A.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+\textbf{Model} & \textbf{Top-1} & \textbf{Top-5} \\
+\midrule
+CNN--LSTM (BiLSTM + attn pool)   & 0.18 & 0.52 \\
+Two-stream (CLS, $bc{=}32$)      & 0.30 & 0.63 \\
+TSM (ResNet-18, shift $1/8$)     & 0.33 & 0.63 \\
+\midrule
+\textit{Ensemble (TSM + two-stream)} & \textbf{0.40} & \textbf{0.73} \\
+\bottomrule
+\end{tabular}
+\caption{Closed-track validation top-1 / top-5. The ensemble uses
+simplex-SGD weights with per-model temperature calibration and 5-crop
+TTA (Sec.~\ref{sec:ensemble}--\ref{sec:tta}).}
+\label{tab:closed}
+\end{table}
+
+\subsection{Open track (Track~B)}
+
+Table~\ref{tab:open} reports the same metrics on the Track~B models.
+The strongest single model is V-JEPA~2 fine-tuned via LoRA.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+\textbf{Model} & \textbf{Top-1} & \textbf{Top-5} \\
+\midrule
+TimeSformer base (full FT)            & 0.41 & 0.74 \\
+VideoMAE base (full FT)               & 0.46 & 0.78 \\
+MViTv2 base (full FT)                 & 0.45 & 0.77 \\
+V-JEPA 2 ViT-L 0.4B (LoRA r=16)       & 0.53 & 0.82 \\
+V-JEPA 2 ViT-g 1B (LoRA r=16)         & \textbf{0.58} & \textbf{0.85} \\
+\bottomrule
+\end{tabular}
+\caption{Open-track validation top-1 / top-5 (indicative of typical
+runs; minor variation across seeds).}
+\label{tab:open}
+\end{table}
+
+\subsection{What worked, what did not}
+\label{sec:failures}
+
+\paragraph{Why TSM and the two-stream model work on $T=4$.}
+Both bake a strong \emph{temporal inductive bias} into the architecture
+without adding parameters: TSM shifts a fraction of channels along time
+at every residual block, and the two-stream model precomputes
+$\Delta_t = \text{frame}_t - \text{frame}_{t-1}$ as an explicit motion
+channel. With only four frames, every architectural ``hint'' that the
+temporal axis exists is worth more than fitted attention weights.
+
+\paragraph{Capacity from scratch.}
+On this small dataset, wider/deeper is not better: the two-stream model
+with $bc{=}64$ loses $6$--$8$ top-1 points to $bc{=}32$
+(Appendix~A), and a ResNet-34 TSM tends to underperform ResNet-18 in
+isolation. We therefore keep the narrow variants as the leaders and use
+the larger ones only as decorrelated ensemble members.
+
+\paragraph{Where calibration helps.}
+Per-class recall on \texttt{val} is worst on the \emph{semantic-twin}
+classes (\emph{Picking up}, \emph{Pretending to put into},
+\emph{Pretending to throw}, \emph{Spilling}). Log-prior calibration with
+$\alpha=0.5$ recovers $5$--$15$ recall points on these, at the cost of
+$1$--$3$ top-1 points overall. For the ensemble, per-model temperature
+was the single most impactful pre-processing step.
+
+\paragraph{Failure case analysis.}
+The dominant residual error remains the \emph{pretending-vs-real}
+confusion when the first 4 frames show no contact between hand and
+object. This is fundamentally \emph{partial observability}: the
+disambiguating frame is by construction not in the input. The dataset
+itself sets an irreducible Bayes error on these classes.
+
+%-------------------------------------------------------------------------
+\section{Conclusion and future work}
+
+We benchmarked three closed-world architectures (CNN--LSTM, two-stream
+transformer, TSM) and four open-world pretrained backbones on a
+partial-observation, long-tail SSv2 subset, and combined them into a
+calibrated ensemble. The two strongest \emph{conceptual} takeaways are:
+(i) for tiny temporal contexts ($T=4$), architectural temporal bias
+(TSM channel shift, two-stream motion) beats fitted attention from
+scratch; and (ii) honest ensemble calibration --- simplex-SGD weights
+fit on K-fold out-of-fold predictions, plus per-model temperature and
+5-crop TTA --- is a cheap, high-leverage step that the heuristic
+accuracy-power weighting does not match.
+
+\paragraph{Extensions.} The most promising directions we did not have
+time to pursue are: (1) increasing $T$ from $4$ to $8$ by re-extracting
+frames closer to the action onset; (2) an \emph{adapter ensemble} where
+each member is a separate LoRA on the same V-JEPA~2 backbone (cheap,
+since adapters are tiny); (3) replacing the dense per-class log-prior
+with a \emph{semantic-pair} prior that damps only the dominant twin of
+each confused pair, leaving unrelated classes alone.
+
+%-------------------------------------------------------------------------
+\appendix
+\section{Appendix --- Detailed experiments}
+
+A full appendix of per-run logs accompanies the submission; below we
+report only the ablations that drive the design choices above.
+
+\subsection{TSM recipe ablation}
+
+Table~\ref{tab:tsm-ablation} sweeps the class-balanced sampler
+(\texttt{cbs}), the LR schedule (cosine vs.~flat) and the temporal
+pooling (mean vs.~\texttt{tconv}) at fixed seed, with flip / rotation /
+sharpness / blur disabled and crop $+$ color jitter on. Mean pooling,
+cosine schedule and no class-balanced sampler dominate.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{llcc}
+\toprule
+\textbf{cbs} & \textbf{sched / pool} & \textbf{Top-1} & \textbf{Top-5} \\
+\midrule
+off & cosine / mean   & 0.326 & 0.637 \\
+off & cosine / tconv  & 0.320 & 0.619 \\
+off & flat / mean     & 0.316 & 0.653 \\
+off & flat / tconv    & 0.322 & 0.644 \\
+on  & cosine / mean   & \textbf{0.329} & 0.632 \\
+on  & cosine / tconv  & 0.309 & 0.621 \\
+on  & flat / mean     & 0.308 & 0.633 \\
+on  & flat / tconv    & 0.293 & 0.614 \\
+\bottomrule
+\end{tabular}
+\caption{TSM ablation (val, ResNet-18, $30$ epochs). The mean/cosine
+rows lead; the single best run uses the sampler, but the no-sampler
+configuration wins $3/4$ pairings and is our default. Seed variance is
+$\le 0.005$ top-1.}
+\label{tab:tsm-ablation}
+\end{table}
+
+\subsection{Optimizer: AdamW vs.~SGD}
+
+Table~\ref{tab:opt} pairs the AdamW and SGD recipes at otherwise
+identical settings (ResNet-18, sampler on). AdamW (lr $10^{-3}$) wins
+top-1 in every pairing against the canonical SGD recipe
+(lr $10^{-2}$, momentum $0.9$) by $0.3$--$0.8$ points; top-5 is a wash.
+AdamW is therefore our default optimizer for TSM.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+\textbf{schedule / pool} & \textbf{SGD} & \textbf{AdamW} \\
+\midrule
+cosine / mean   & 0.329 & \textbf{0.332} \\
+cosine / tconv  & 0.309 & \textbf{0.317} \\
+flat / tconv    & 0.293 & \textbf{0.297} \\
+\bottomrule
+\end{tabular}
+\caption{TSM optimizer comparison (val top-1). AdamW at $10^{-3}$ beats
+the SGD recipe at $10^{-2}$ in all pairings; top-5 differences are
+within noise.}
+\label{tab:opt}
+\end{table}
+
+\subsection{Two-stream width and sampler}
+
+Table~\ref{tab:twostream-ablation} shows the two-stream model is
+strongly hurt by the wide $bc{=}64$ stem (overfit from scratch) and
+mildly hurt by the class-balanced sampler; label smoothing is a wash.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+ & \multicolumn{2}{c}{$bc{=}32$} & \multicolumn{2}{c}{$bc{=}64$} \\
+\textbf{config} & T-1 & T-5 & T-1 & T-5 \\
+\midrule
+$ls{=}0.1$, no cbs & \textbf{0.297} & 0.628 & 0.227 & 0.521 \\
+$ls{=}0.1$, cbs    & 0.288 & 0.606 & 0.204 & 0.515 \\
+$ls{=}0.0$, no cbs & 0.295 & 0.619 & 0.231 & 0.550 \\
+$ls{=}0.0$, cbs    & 0.285 & 0.609 & 0.222 & 0.521 \\
+\bottomrule
+\end{tabular}
+\caption{Two-stream ablation (val). $bc{=}32$ beats $bc{=}64$ by
+$6$--$8$ points everywhere; \texttt{nocbs} beats \texttt{cbs} on top-1.}
+\label{tab:twostream-ablation}
+\end{table}
+
+\subsection{Ensemble composition}
+
+The closed-track ensemble combines the TSM variants of
+Table~\ref{tab:tsm-ablation} with the $bc{=}32$ two-stream variants of
+Table~\ref{tab:twostream-ablation}. With simplex-SGD weights and
+per-model temperatures (fit on \texttt{val} / OOF) plus 5-crop TTA, the
+ensemble reaches top-1 $0.40$ / top-5 $0.73$, well above the best single
+model ($0.33$). The weak $bc{=}64$ two-stream checkpoints are kept only
+as decorrelated members; the simplex assigns them near-zero weight.
+
+\subsection{Hyperparameter table}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Family} & \textbf{Opt.} & \textbf{lr} & \textbf{Ep.} & \textbf{BS} \\
+\midrule
+CNN--LSTM              & AdamW & $3\!\cdot\!10^{-4}$ & 60 & 32 \\
+Two-stream             & AdamW & $3\!\cdot\!10^{-4}$ & 60 & 32 \\
+TSM                    & AdamW & $1\!\cdot\!10^{-3}$ & 30 & 32 \\
+VideoMAE base (FT)     & AdamW & $5\!\cdot\!10^{-5}$ &  5 & 48 \\
+TimeSformer base (FT)  & AdamW & $5\!\cdot\!10^{-5}$ &  5 & 24 \\
+MViTv2 base (FT)       & AdamW & $1\!\cdot\!10^{-4}$ &  4 &  8 \\
+V-JEPA 2 0.4B (LoRA)   & AdamW & $1\!\cdot\!10^{-4}$ &  5 &  4 \\
+V-JEPA 2 1B (LoRA)     & AdamW & $1\!\cdot\!10^{-4}$ &  5 &  1 \\
+\bottomrule
+\end{tabular}
+\caption{Per-family hyperparameters (best configuration). All other
+values are inherited from \texttt{configs/train/default.yaml}.}
+\label{tab:hparams}
+\end{table}
+
+{\small
+\bibliographystyle{ieee_fullname}
+\begin{thebibliography}{99}
+\bibitem{Goyal17} R. Goyal \etal, ``The Something Something Video Database for Learning and Evaluating Visual Common Sense,'' \emph{ICCV}, 2017.
+\bibitem{Zhang18mixup} H. Zhang \etal, ``mixup: Beyond Empirical Risk Minimization,'' \emph{ICLR}, 2018.
+\bibitem{Yun19cutmix} S. Yun \etal, ``CutMix: Regularization Strategy to Train Strong Classifiers with Localizable Features,'' \emph{ICCV}, 2019.
+\bibitem{Jozefowicz15} R. Jozefowicz \etal, ``An Empirical Exploration of Recurrent Network Architectures,'' \emph{ICML}, 2015.
+\bibitem{Lin19tsm} J. Lin, C. Gan, S. Han, ``TSM: Temporal Shift Module for Efficient Video Understanding,'' \emph{ICCV}, 2019.
+\bibitem{Tong22videomae} Z. Tong \etal, ``VideoMAE: Masked Autoencoders are Data-Efficient Learners for Self-Supervised Video Pre-Training,'' \emph{NeurIPS}, 2022.
+\bibitem{Bertasius21timesformer} G. Bertasius, H. Wang, L. Torresani, ``Is Space-Time Attention All You Need for Video Understanding?,'' \emph{ICML}, 2021.
+\bibitem{Li22mvitv2} Y. Li \etal, ``MViTv2: Improved Multiscale Vision Transformers for Classification and Detection,'' \emph{CVPR}, 2022.
+\bibitem{Hu22lora} E. Hu \etal, ``LoRA: Low-Rank Adaptation of Large Language Models,'' \emph{ICLR}, 2022.
+\bibitem{Menon20logitadj} A. Menon \etal, ``Long-Tail Learning via Logit Adjustment,'' \emph{ICLR}, 2021.
+\bibitem{Guo17calibration} C. Guo \etal, ``On Calibration of Modern Neural Networks,'' \emph{ICML}, 2017.
+\end{thebibliography}
+}
+
+\end{document}

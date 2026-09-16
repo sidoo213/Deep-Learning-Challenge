@@ -1,0 +1,28 @@
+# @package _global_
+# ResNet18 per frame + Transformer encoder over time (Track A: pretrained=false)
+# Rewrite with: drop path, no-WD for pos embeds, ViT-style init, configurable
+# spatial pooling, configurable internal temporal resolution.
+model:
+  name: cnn_transformer
+  pretrained: false
+  num_classes: ${num_classes}
+
+  # Internal temporal resolution. The forward pass linearly interpolates the
+  # 4 input frames to this T. Set to 0 to skip interpolation (use raw T=4).
+  # 7 spreads time tokens for the transformer; 4 is the conservative choice.
+  num_frames: 7
+
+  # Spatial pooling level after ResNet-18 stage4 (which outputs 7x7):
+  #   0 -> keep raw 7x7 = 49 tokens/frame (heavy, ~344 tokens total with T=7)
+  #   1 -> single global token per frame (~7 tokens + CLS, loses spatial info)
+  #   2 -> 2x2 = 4 tokens per frame (recommended middle ground)
+  spatial_tokens_side: 2
+
+  # Transformer
+  d_model: 512               # must match ResNet-18 feature dim
+  num_layers: 4
+  num_heads: 8               # head_dim = 64
+  mlp_ratio: 2.0             # smaller than ViT's 4.0 — dataset is small
+  dropout: 0.1
+  attn_dropout: 0.0
+  drop_path: 0.1             # max stochastic depth (linearly scaled across blocks)

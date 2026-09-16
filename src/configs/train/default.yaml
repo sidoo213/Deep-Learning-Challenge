@@ -1,0 +1,99 @@
+# @package _global_
+training:
+  batch_size: 8
+  lr: 0.0001
+  epochs: 5
+  num_workers: 2
+  # Where to save the best checkpoint (by validation accuracy)
+  checkpoint_path: ${hydra:runtime.cwd}/best_model.pt
+  device: cuda
+  resume_checkpoint: null
+  # Optimizer: "adam", "adamw", or "sgd". AdamW applies decoupled weight decay.
+  optimizer: adam
+  weight_decay: 0.0
+  # Mixed precision (AMP): much faster on GPU, ~half the VRAM. CUDA only.
+  use_amp: true
+  # Learning-rate schedule. "none" (default) keeps a flat LR for the whole run
+  # (legacy behavior). "cosine" does linear warmup over `warmup_epochs`, then a
+  # cosine decay down to `min_lr_ratio * lr` across the remaining epochs. Works
+  # with any optimizer and respects per-group base LRs (LLRD / wd-split).
+  scheduler: none
+  warmup_epochs: 0
+  min_lr_ratio: 0.0
+  # DataLoader knobs (active when num_workers > 0).
+  persistent_workers: false
+  prefetch_factor: 4
+  # Layer-wise LR decay (ViT fine-tuning standard): head gets `lr`, each
+  # transformer block earlier gets `lr * llrd_rate^(depth_to_head)`. Only
+  # supported by models with a get_param_groups_llrd() method (V-JEPA 2 for
+  # now). 0.65 is standard for ViT-L, 0.75 for ViT-B.
+  lwlrdecay: false
+  llrd_rate: 0.65
+  # Augmentation toggles (applied only during training, never on val/test).
+  # The random params below are sampled ONCE per clip and applied identically
+  # to every frame — temporal consistency is preserved.
+  use_horizontal_flip: false
+  use_random_crop: false
+  random_crop_scale: [0.7, 1.0]
+  random_crop_ratio: [0.85, 1.15]
+  use_color_jitter: false
+  color_jitter_strength: 0.2
+  # Random erasing: zero out a random rectangle, same rectangle across all frames.
+  use_random_erasing: false
+  random_erasing_p: 0.25
+  random_erasing_scale: [0.02, 0.2]
+  random_erasing_ratio: [0.3, 3.3]
+  # Small rotation: same angle across all 4 frames. Big angles break SSv2.
+  use_rotation: false
+  rotation_degrees: 5.0
+  # Sharpness: factor sampled in [1-s, 1+s]; same factor across all 4 frames.
+  use_sharpness: false
+  sharpness_strength: 0.5
+  # Gaussian blur: probabilistic, same sigma across all 4 frames.
+  use_blur: false
+  blur_p: 0.2
+  blur_kernel: 5
+  blur_sigma: [0.1, 1.5]
+  # Class-imbalanced sampling: oversample clips from rare classes per epoch.
+  # method "sqrt" (recommended) uses w ~ 1/sqrt(count) — softer than full inverse.
+  # method "inv" uses w ~ 1/count — strict balancing.
+  use_class_balanced_sampler: false
+  class_balance_method: sqrt
+  # Mixup / CutMix: interpolate or paste pairs of clips inside each batch to
+  # fight overfit. When both are on, each batch flips a coin between them
+  # (standard timm policy). mix_prob is the per-batch probability of applying.
+  # Typical α for Mixup is 0.2, for CutMix is 1.0.
+  use_mixup: false
+  mixup_alpha: 0.2
+  use_cutmix: false
+  cutmix_alpha: 1.0
+  mix_prob: 1.0
+  # ---- Loss function (all OFF by default — preserves legacy CE behavior) ----
+  # Cross-entropy with label_smoothing=0.1 stays the default unchanged.
+  label_smoothing: 0.1
+  # Focal Loss (Lin et al. 2017): focuses gradient on hard examples. γ=2 typical.
+  use_focal_loss: false
+  focal_gamma: 2.0
+  # Per-class weighting in the loss (works with CE or FocalLoss).
+  # method options: "none", "inv_freq", "inv_sqrt_freq", "effective_num"
+  use_class_weights: false
+  class_weights_method: inv_sqrt_freq
+  class_weights_beta: 0.9999  # only used by "effective_num"
+  # Logit Adjustment (Menon et al. 2020): adds τ·log P(y) to logits AT TRAINING
+  # so the network learns log P(x|y) natively. Inference uses raw logits — do
+  # NOT apply +calibration.use_prior=true on a checkpoint trained with this.
+  use_logit_adjustment: false
+  logit_adjustment_tau: 1.0
+  logit_adjustment_train_dir: null  # null → falls back to dataset.train_dir
+
+# ---- Weights & Biases (opt-in, default OFF) -------------------------------
+# Enable with `wandb.enabled=true`. The full resolved config is logged, so
+# every hyperparameter is filterable/groupable in the dashboard. `name=null`
+# auto-derives the run name from the checkpoint filename.
+wandb:
+  enabled: false
+  project: video-anticipation
+  entity: null          # your W&B username or team; null = your default entity
+  name: null            # null → checkpoint file stem (e.g. tsm_seed9010_samp1_cos_tconv)
+  mode: online          # online | offline | disabled
+  tags: []

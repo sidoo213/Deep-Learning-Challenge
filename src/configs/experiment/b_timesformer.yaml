@@ -1,0 +1,19 @@
+# @package _global_
+# Track B (open world): TimeSformer base — fine-tune on the 33-class challenge subset.
+defaults:
+  - override /model: b_timesformer
+
+dataset:
+  # The dataset has exactly 4 frames per video — match the model.
+  num_frames: 4
+
+training:
+  epochs: 5
+  batch_size: 64          # 4 frames is light on VRAM; tune up if you can
+  lr: 5.0e-5
+  optimizer: adamw
+  weight_decay: 0.05
+  use_horizontal_flip: true
+  use_random_crop: true
+  random_crop_scale: [0.85, 1.0]
+  use_color_jitter: false

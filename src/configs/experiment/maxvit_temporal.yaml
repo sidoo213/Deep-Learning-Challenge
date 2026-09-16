@@ -1,0 +1,62 @@
+# @package _global_
+# MaxViT-Tiny + temporal mean pooling — Track A (from scratch).
+# Reasonable from-scratch recipe: AdamW, weight decay 0.05, strong aug,
+# class-balanced sampling, label smoothing. Mixup / cutmix off by default
+# to keep the gradient signal clean while the backbone is still learning
+# its spatial filters from random init.
+defaults:
+  - override /model: maxvit_temporal
+
+dataset:
+  # MaxViT-Tiny is fixed at 224x224 (torchvision hard-codes the partition
+  # window size). The dataset ships exactly 4 frames per clip.
+  num_frames: 4
+  image_size: 224
+
+training:
+  epochs: 30
+  # MaxViT-Tiny ~31M params + T=4 = effective batch of 64 frames at bs=16.
+  # On a 24 GB GPU with AMP, bs=16 is the safe operating point. Drop to 8
+  # if you OOM, or push to 24 if you have headroom.
+  batch_size: 16
+  lr: 3.0e-4
+  optimizer: adamw
+  weight_decay: 0.05
+  use_amp: true
+
+  # No pretrained transformer blocks — layer-wise LR decay is irrelevant.
+  lwlrdecay: false
+
+  # ---- Augmentation: aggressive but not extreme --------------------------
+  # Horizontal flip OFF — SSv2 has directional classes ("left to right" vs
+  # "right to left") and flipping silently mislabels them.
+  use_horizontal_flip: false
+  use_random_crop: true
+  random_crop_scale: [0.7, 1.0]
+  random_crop_ratio: [0.85, 1.15]
+  use_color_jitter: true
+  color_jitter_strength: 0.2
+  use_random_erasing: true
+  random_erasing_p: 0.25
+  random_erasing_scale: [0.02, 0.2]
+  use_rotation: true
+  rotation_degrees: 8.0
+  use_sharpness: false
+  use_blur: false
+
+  # ---- Class balancing (long-tail train distribution) --------------------
+  use_class_balanced_sampler: true
+  class_balance_method: sqrt
+
+  # ---- Mixup / cutmix OFF on the default recipe --------------------------
+  # MaxViT-Tiny is heavy enough that simply training stably matters more
+  # than aggressive label mixing while the spatial filters are still
+  # crystallizing. Enable from the CLI for ensemble diversity.
+  use_mixup: false
+  use_cutmix: false
+
+  label_smoothing: 0.1
+
+  num_workers: 8
+  persistent_workers: true
+  prefetch_factor: 4

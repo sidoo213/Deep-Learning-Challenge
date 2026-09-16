@@ -1,0 +1,70 @@
+# @package _global_
+# Track B (open world): V-JEPA 2 ViT-g (1B) fine-tuned with LoRA.
+#
+# Motivation:
+#   Full fine-tune of the 1B variant moves ~1.1B parameters and is fragile —
+#   easy to underfit (too few epochs), overfit (too many), or destroy the
+#   SSv2 pretraining (too high LR). LoRA freezes the backbone and trains only
+#   small low-rank adapters (~5M params, < 0.5% of the model) plus the new
+#   classifier head. The pretrained weights stay intact, so:
+#     - Training is 2-3x faster (no backward through frozen tensors).
+#     - VRAM drops significantly (no optimizer state for frozen params).
+#     - LR can be 10x larger than full FT — LoRA adapters tolerate 1e-4 easily.
+#     - Catastrophic forgetting is impossible (the base weights don't move).
+#
+# Designed for:
+#   * 24 GB GPU with gradient checkpointing on.
+#   * 4 frames @ 224x224 from processed_data (wrapper replicates to 64x384).
+#
+# Use this when:
+#   * Zero-shot mapping gave ~random accuracy (≈ 3% for 33 classes).
+#   * You want a fast, robust first fine-tune to validate the pipeline before
+#     attempting full FT.
+#   * You want to ensemble multiple light fine-tunes (LoRA adapters are cheap
+#     to swap on the same base model).
+
+defaults:
+  - override /model: b_vjepa2_1b
+
+model:
+  use_lora: true
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  # null -> wrapper default: q/k/v/o projections (attention only, no MLP).
+  # Override to e.g. ["q_proj","v_proj"] for half the adapters, or add MLP
+  # names ("fc1","fc2") for more expressivity at the cost of more params.
+  lora_target_modules: null
+  lora_bias: none
+
+dataset:
+  num_frames: 4
+
+training:
+  # LoRA adapters converge faster than full FT — 5 epochs is usually plenty.
+  epochs: 5
+  # ViT-g + 64 internal frames @ 384 is huge, but with the backbone frozen
+  # we save the optimizer state for ~1B params (~8 GB at fp32 / 4 GB at bf16).
+  # batch_size=2 typically fits in 24 GB with gradient checkpointing.
+  batch_size: 1
+  # LoRA tolerates ~10x the LR of full FT. 1e-4 is the classic LoRA default.
+  # If the loss plateaus early, double to 2e-4; if it diverges, halve.
+  lr: 1.0e-4
+  optimizer: adamw
+  weight_decay: 0.0    # adapters don't need WD (they regularize structurally)
+  use_amp: true
+
+  # LLRD is irrelevant under LoRA: backbone params are frozen, adapter
+  # matrices are typically trained with a flat LR. Leave it off.
+  lwlrdecay: false
+
+  # Mild augmentation only — the pretrained V-JEPA 2 prior is already strong.
+  use_horizontal_flip: false       # SSv2 has directional classes
+  use_random_crop: true
+  random_crop_scale: [0.85, 1.0]
+  use_color_jitter: false
+  use_random_erasing: false
+
+  num_workers: 8
+  persistent_workers: true
+  prefetch_factor: 4

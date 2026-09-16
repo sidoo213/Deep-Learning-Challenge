@@ -1,0 +1,45 @@
+# @package _global_
+# Track B (open world): V-JEPA 2 ViT-g (1B params), Meta 2025, finetuned on
+# Something-Something V2.
+# Source: https://huggingface.co/facebook/vjepa2-vitg-fpc64-384-ssv2
+# Same self-supervised + SSv2-finetuned recipe as the ViT-L variant
+# (b_vjepa2.yaml), but ~2.5x the parameters and a much heavier input pipeline
+# (64 frames at 384x384 native). State-of-the-art on SSv2; expect a small
+# but real lift over the ViT-L if you can afford the compute.
+model:
+  name: b_vjepa2_1b
+  pretrained: true
+  num_classes: ${num_classes}
+  # 1B-param ViT-g checkpoint. Mirror: qubvel-hf/vjepa2-vitg-fpc64-384-ssv2.
+  model_id: facebook/vjepa2-vitg-fpc64-384-ssv2
+  # processed_data ships 4 frames per clip; this checkpoint's native = 64.
+  # The wrapper replicates each input frame native/target = 16 times along
+  # the time axis. 4 divides 64, so this is exact.
+  num_frames: 4
+  # The fpc64 checkpoint was trained at 384x384. The wrapper bilinearly
+  # upsamples 224x224 inputs to 384 internally — set this to match the
+  # checkpoint family.
+  image_size: 384
+  # Linear probe (freeze everything but the new classifier head) is the
+  # safest entry point on a small GPU. Set to false for full finetune once
+  # you've sized your VRAM budget.
+  freeze_backbone: false
+  # Gradient checkpointing: trades ~25-30% extra compute for a 3-5x cut in
+  # activation VRAM. Effectively mandatory for ViT-g on a 24 GB GPU — without
+  # it, even batch_size=1 OOMs because of the 64×(384/16)² ≈ 18k attention
+  # tokens per block × 40 blocks.
+  use_gradient_checkpointing: true
+
+  # ----- LoRA (parameter-efficient fine-tuning) ----------------------------- #
+  # When use_lora=true, the backbone is frozen and small low-rank adapter
+  # matrices are inserted in the attention projections. Trains ~0.5% of the
+  # model's parameters instead of all 1B — much faster, lower VRAM, and far
+  # less prone to catastrophic forgetting of the SSv2 pretraining.
+  # Use a dedicated experiment (e.g. `experiment=b_vjepa2_1b_lora`) that picks
+  # an LR ~10x larger than full FT (LoRA adapters tolerate it).
+  use_lora: false
+  lora_r: 16                       # rank — 8/16/32 typical; raise if underfitting
+  lora_alpha: 32                   # scaling; convention is alpha = 2 * r
+  lora_dropout: 0.05               # standard for ViT LoRA
+  lora_target_modules: null        # null -> wrapper default (q/k/v/o projections)
+  lora_bias: none                  # "none" / "all" / "lora_only"

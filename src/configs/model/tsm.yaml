@@ -1,0 +1,29 @@
+# @package _global_
+# TSM (Temporal Shift Module) — Track A (from scratch).
+# Reference: Lin et al., "TSM: Temporal Shift Module for Efficient Video
+# Understanding" (ICCV 2019). 2D ResNet18 + per-block channel shift along time.
+model:
+  name: tsm
+  pretrained: false
+  num_classes: ${num_classes}
+  # Number of frames per clip. MUST equal dataset.num_frames (asserted at forward).
+  # Pinned to 4 because the processed_data folders contain exactly 4 frames.
+  num_segments: 4
+  # ResNet18 base channels (final feature dim = base_channels * 8 = 512 by default).
+  base_channels: 64
+  # Depth: false = ResNet-18 layout (2,2,2,2); true = ResNet-34 (3,4,6,3).
+  # Both use BasicBlocks. ResNet-34 ~2x params -> more overfit risk from scratch.
+  resnet34: false
+  # Dropout applied just before the classifier.
+  dropout: 0.5
+  # 1/fold_div of channels get shifted forward, another 1/fold_div backward.
+  # Default fold_div=8 means 12.5% shift forward + 12.5% backward = 25% touched.
+  fold_div: 8
+  # How the per-frame features are aggregated over T before the classifier:
+  #   "mean"      — average over T (original TSM/TSN consensus; order-agnostic).
+  #   "attention" — learned per-frame weighting (more expressive; +~dim^2 params).
+  #   "tconv"     — depthwise 1-D conv over T then mean. Order-aware (best fit
+  #                 for the anticipation task) and very light (~3*dim params).
+  # Old checkpoints (saved without this key) default to "mean" and load as-is.
+  # Ablation winner: "mean" beats "tconv" on top-1 (e.g. 0.326 vs 0.320, cosine).
+  temporal_pool: mean

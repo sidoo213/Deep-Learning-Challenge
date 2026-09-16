@@ -1,0 +1,21 @@
+# @package _global_
+# Track B (open world): VideoMAE base — fine-tune on the 33-class challenge subset.
+# Pretrained on SSv2 (the same data family), so few epochs + low lr are usually enough.
+defaults:
+  - override /model: b_videomae
+
+dataset:
+  # The dataset has exactly 4 frames per video — match the model.
+  num_frames: 4
+
+training:
+  epochs: 5
+  batch_size: 48          # 4 frames is light on VRAM; tune up if you can
+  lr: 5.0e-5              # low LR is critical for fine-tuning pretrained transformers
+  optimizer: adamw
+  weight_decay: 0.05
+  # Augmentation: mild — strong aug can hurt when fine-tuning from a strong prior.
+  use_horizontal_flip: true
+  use_random_crop: true
+  random_crop_scale: [0.85, 1.0]
+  use_color_jitter: false

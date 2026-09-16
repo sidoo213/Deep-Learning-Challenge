@@ -1,0 +1,14 @@
+# @package _global_
+# Baseline experiment: CNN backbone + temporal average pooling (Track A).
+defaults:
+  - override /model: cnn_baseline
+
+dataset:
+  num_frames: 4
+
+model:
+  # Track A (closed world) — MUST be false. Without this line the experiment
+  # inherits cnn_baseline.yaml's default `pretrained: true`, which silently
+  # loads ImageNet weights (illegal for the closed track) and makes this
+  # experiment identical to `baseline_pretrained`.
+  pretrained: false

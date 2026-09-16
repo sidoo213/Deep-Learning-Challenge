@@ -1,0 +1,31 @@
+# @package _global_
+# Track B (open world): V-JEPA 2 ViT-L finetune.
+# Strong prior on SSv2 means: few epochs, low LR, gentle augmentation.
+defaults:
+  - override /model: b_vjepa2
+
+dataset:
+  # Project-pinned at 4 frames. The wrapper replicates each to fit V-JEPA 2's
+  # native 16-frame input.
+  num_frames: 4
+
+training:
+  epochs: 5
+  # ViT-L + 16 internal frames @ 256 -> ~16-24 GB with AMP. Drop to 4 if VRAM-tight.
+  batch_size: 8
+  # Low LR is critical when finetuning a strong pretrained transformer.
+  lr: 5.0e-5
+  optimizer: adamw
+  weight_decay: 0.05
+  use_amp: true
+
+  # Augmentation: mild. Heavy augmentation hurts when the prior is already strong.
+  use_horizontal_flip: false   # SSv2 has directional classes — flip is label noise.
+  use_random_crop: true
+  random_crop_scale: [0.85, 1.0]
+  use_color_jitter: false
+  # Random erasing optional — gentle helps regularize the head.
+  use_random_erasing: false
+
+  num_workers: 8
+  persistent_workers: true

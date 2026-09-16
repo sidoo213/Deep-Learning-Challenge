@@ -1,0 +1,31 @@
+# @package _global_
+# CoAtNet (Dai et al., NeurIPS 2021) used as a frame encoder + temporal mean
+# pooling. Track A by default (pretrained=false).
+#
+# Architectural recap (per stage):
+#   S0 stem  : conv 3x3
+#   S1-S2    : MBConv  (depthwise + squeeze-excitation)  — pure CNN.
+#   S3-S4    : Transformer with RELATIVE attention.
+#   Pool     : global average.
+#
+# Designed for "all data sizes" — trains from scratch on small datasets
+# (~30k clips here) while still scaling to ImageNet-21k+. Architecturally
+# complementary to MaxViT (which interleaves conv + attn in every block).
+model:
+  name: coatnet_temporal
+  pretrained: false
+  num_classes: ${num_classes}
+
+  # timm variant. Sweet spot for our dataset is coatnet_0 (~25M params).
+  # See coatnet_temporal.py for the full list of supported variants.
+  variant: coatnet_0_rw_224
+
+  # Dropout applied between the pooled per-frame features and the linear
+  # head. The CoAtNet blocks already use stochastic depth internally, so
+  # 0.3 here is a moderate extra regularizer for from-scratch training.
+  # Set to 0.0 to disable.
+  dropout: 0.3
+
+  # Trade ~30% wall-clock for 30-50% VRAM. Useful on coatnet_1+ with
+  # tight memory; off by default on coatnet_0 (fits comfortably).
+  use_gradient_checkpointing: false

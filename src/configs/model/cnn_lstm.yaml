@@ -1,0 +1,17 @@
+# @package _global_
+# ResNet18 per frame + bidirectional LSTM with attention pooling.
+# Designed for Track A (closed world / from scratch), with heavy
+# regularization to fight overfitting on the small training set.
+model:
+  name: cnn_lstm
+  pretrained: false              # Track A: no ImageNet weights.
+  num_classes: ${num_classes}
+
+  # Bidirectional LSTM: output dim = 2 * lstm_hidden_size = 512 (matches backbone).
+  lstm_hidden_size: 256
+  lstm_num_layers: 2
+  lstm_dropout: 0.3              # inter-layer dropout (only active when num_layers > 1)
+
+  # Regularization knobs (Track A defaults — overfit is the main enemy).
+  feature_dropout: 0.2           # on CNN features, before the LSTM
+  head_dropout: 0.5              # on the pooled vector, before the classifier
